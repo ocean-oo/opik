@@ -216,6 +216,9 @@ onlineScoring:
     - scorer: llm_as_judge
       streamName: stream_scoring_llm_as_judge
       codec: java
+    - scorer: user_defined_metric_python
+      streamName: stream_scoring_user_defined_metric_python
+      codec: json
 
 # LLM providers client configuration
 llmProviderClient:
@@ -265,16 +268,16 @@ llmProviderClient:
 
 # Configuration for cache manager
 cacheManager:
-    # Default: true
-    # Description: Whether or not cache manager is enabled
-    enabled: ${CACHE_MANAGER_ENABLED:-true}
-    # Default: PT1S
-    # Description: Time to live for cache entries in using the formats accepted are based on the ISO-8601: https://docs.oracle.com/javase/8/docs/api/java/time/Duration.html#parse-java.lang.CharSequence-
-    defaultDuration: ${CACHE_MANAGER_DEFAULT_DURATION:-PT1S}
-    caches:
-      # Default: {}
-      # Description: Dynamically created caches with their respective time to live in seconds
-      automationRules: ${CACHE_MANAGER_AUTOMATION_RULES_DURATION:-PT1S}
+  # Default: true
+  # Description: Whether or not cache manager is enabled
+  enabled: ${CACHE_MANAGER_ENABLED:-true}
+  # Default: PT1S
+  # Description: Time to live for cache entries in using the formats accepted are based on the ISO-8601: https://docs.oracle.com/javase/8/docs/api/java/time/Duration.html#parse-java.lang.CharSequence-
+  defaultDuration: ${CACHE_MANAGER_DEFAULT_DURATION:-PT1S}
+  caches:
+    # Default: {}
+    # Description: Dynamically created caches with their respective time to live in seconds
+    automationRules: ${CACHE_MANAGER_AUTOMATION_RULES_DURATION:-PT1S}
 
 # Configuration for clickhouse log appender
 clickHouseLogAppender:

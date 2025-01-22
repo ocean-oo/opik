@@ -25,16 +25,18 @@ import java.util.UUID;
 @SuperBuilder(toBuilder = true)
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "type", visible = true)
 @JsonSubTypes({
-        @JsonSubTypes.Type(value = AutomationRuleEvaluatorLlmAsJudge.class, name = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE)
+        @JsonSubTypes.Type(value = AutomationRuleEvaluatorLlmAsJudge.class, name = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE),
+        @JsonSubTypes.Type(value = AutomationRuleEvaluatorUserDefinedMetricPython.class, name = AutomationRuleEvaluatorType.Constants.USER_DEFINED_METRIC_PYTHON)
 })
 @Schema(name = "AutomationRuleEvaluator", discriminatorProperty = "type", discriminatorMapping = {
-        @DiscriminatorMapping(value = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE, schema = AutomationRuleEvaluatorLlmAsJudge.class)
+        @DiscriminatorMapping(value = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE, schema = AutomationRuleEvaluatorLlmAsJudge.class),
+        @DiscriminatorMapping(value = AutomationRuleEvaluatorType.Constants.USER_DEFINED_METRIC_PYTHON, schema = AutomationRuleEvaluatorUserDefinedMetricPython.class)
 })
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public abstract sealed class AutomationRuleEvaluator<T> implements AutomationRule
-        permits AutomationRuleEvaluatorLlmAsJudge {
+        permits AutomationRuleEvaluatorLlmAsJudge, AutomationRuleEvaluatorUserDefinedMetricPython {
 
     @JsonView({View.Public.class})
     @Schema(accessMode = Schema.AccessMode.READ_ONLY)
@@ -72,6 +74,8 @@ public abstract sealed class AutomationRuleEvaluator<T> implements AutomationRul
     @JsonIgnore
     public abstract T getCode();
 
+    public abstract <C extends AutomationRuleEvaluator<T>, B extends AutomationRuleEvaluatorBuilder<T, C, B>> AutomationRuleEvaluatorBuilder<T, C, B> toBuilder();
+
     @Override
     public AutomationRuleAction getAction() {
         return AutomationRuleAction.EVALUATOR;
@@ -81,6 +85,7 @@ public abstract sealed class AutomationRuleEvaluator<T> implements AutomationRul
     public static class View {
         public static class Write {
         }
+
         public static class Public {
         }
     }

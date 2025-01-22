@@ -2,7 +2,7 @@ package com.comet.opik.api.resources.v1.events;
 
 import com.comet.opik.api.AutomationRuleEvaluatorType;
 import com.comet.opik.api.FeedbackScoreBatchItem;
-import com.comet.opik.api.events.TraceToScoreLlmAsJudge;
+import com.comet.opik.api.events.TraceToScoreUserDefinedMetricPython;
 import com.comet.opik.domain.FeedbackScoreService;
 import com.comet.opik.domain.UserLog;
 import com.comet.opik.domain.llm.ChatCompletionService;
@@ -31,26 +31,26 @@ import static java.util.stream.Collectors.toList;
 /**
  * This service listens a Redis stream for Traces to be scored in a LLM provider. It will prepare the LLM request
  * by rendering message templates using values from the Trace and prepare the schema for the return (structured output).
- *
- * The service has to implement the Managed interface to be able to start and stop the stream connected to the application lifecycle.
  */
 @EagerSingleton
 @Slf4j
-public class OnlineScoringLlmAsJudgeScorer extends OnlineScoringBaseScorer<TraceToScoreLlmAsJudge> {
+public class OnlineScoringUserDefinedMetricPythonScorer
+        extends
+            OnlineScoringBaseScorer<TraceToScoreUserDefinedMetricPython> {
 
     private final ChatCompletionService aiProxyService;
     private final FeedbackScoreService feedbackScoreService;
     private final Logger userFacingLogger;
 
     @Inject
-    public OnlineScoringLlmAsJudgeScorer(@NonNull @Config("onlineScoring") OnlineScoringConfig config,
+    public OnlineScoringUserDefinedMetricPythonScorer(@NonNull @Config("onlineScoring") OnlineScoringConfig config,
             @NonNull RedissonReactiveClient redisson,
             @NonNull ChatCompletionService aiProxyService,
             @NonNull FeedbackScoreService feedbackScoreService) {
-        super(config, redisson, AutomationRuleEvaluatorType.LLM_AS_JUDGE);
+        super(config, redisson, AutomationRuleEvaluatorType.USER_DEFINED_METRIC_PYTHON);
         this.aiProxyService = aiProxyService;
         this.feedbackScoreService = feedbackScoreService;
-        this.userFacingLogger = UserFacingLoggingFactory.getLogger(OnlineScoringLlmAsJudgeScorer.class);
+        this.userFacingLogger = UserFacingLoggingFactory.getLogger(OnlineScoringUserDefinedMetricPythonScorer.class);
     }
 
     /**
@@ -59,7 +59,7 @@ public class OnlineScoringLlmAsJudgeScorer extends OnlineScoringBaseScorer<Trace
      *
      * @param message a Redis message with Trace to score with an Evaluator code, workspace and username
      */
-    protected void score(TraceToScoreLlmAsJudge message) {
+    protected void score(TraceToScoreUserDefinedMetricPython message) {
         var trace = message.trace();
 
         // This is crucial for logging purposes to identify the rule and trace

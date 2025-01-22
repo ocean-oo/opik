@@ -2,7 +2,8 @@ package com.comet.opik.api.resources.v1.priv;
 
 import com.comet.opik.api.AutomationRuleEvaluator;
 import com.comet.opik.api.AutomationRuleEvaluatorLlmAsJudge;
-import com.comet.opik.api.AutomationRuleEvaluatorUpdate;
+import com.comet.opik.api.AutomationRuleEvaluatorUpdateLlmAsJudge;
+import com.comet.opik.api.AutomationRuleEvaluatorUserDefinedMetricPython;
 import com.comet.opik.api.BatchDelete;
 import com.comet.opik.api.Trace;
 import com.comet.opik.api.resources.utils.AuthTestUtils;
@@ -22,16 +23,21 @@ import com.comet.opik.infrastructure.llm.LlmModule;
 import com.comet.opik.podam.PodamFactoryUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.uuid.Generators;
+import com.fasterxml.uuid.impl.TimeBasedEpochGenerator;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.google.inject.AbstractModule;
 import com.redis.testcontainers.RedisContainer;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import io.dropwizard.jersey.errors.ErrorMessage;
 import jakarta.ws.rs.HttpMethod;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.http.HttpStatus;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.AfterAll;
@@ -60,6 +66,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -86,6 +93,8 @@ import static org.mockito.Mockito.when;
 class AutomationRuleEvaluatorsResourceTest {
 
     private static final String URL_TEMPLATE = "%s/v1/private/automations/projects/%s/evaluators/";
+
+    private static final String[] AUTOMATION_RULE_EVALUATOR_IGNORED_FIELDS = {"createdAt", "lastUpdatedAt"};
 
     private static final String messageToTest = "Summary: {{summary}}\\nInstruction: {{instruction}}\\n\\n";
     private static final String testEvaluator = """
@@ -146,7 +155,7 @@ class AutomationRuleEvaluatorsResourceTest {
     private static final ClickHouseContainer CLICKHOUSE = ClickHouseContainerUtils.newClickHouseContainer();
 
     @RegisterExtension
-    private static TestDropwizardAppExtension APP;
+    private static final TestDropwizardAppExtension APP;
 
     private static final WireMockUtils.WireMockRuntime wireMock;
 
@@ -177,6 +186,7 @@ class AutomationRuleEvaluatorsResourceTest {
     }
 
     private final PodamFactory factory = PodamFactoryUtils.newPodamFactory();
+    private final TimeBasedEpochGenerator generator = Generators.timeBasedEpochGenerator();
 
     private String baseURI;
     private ClientSupport client;
@@ -227,7 +237,6 @@ class AutomationRuleEvaluatorsResourceTest {
 
         @BeforeEach
         void setUp() {
-
             wireMock.server().stubFor(
                     post(urlPathEqualTo("/opik/auth"))
                             .withHeader(HttpHeaders.AUTHORIZATION, equalTo(fakeApikey))
@@ -241,90 +250,39 @@ class AutomationRuleEvaluatorsResourceTest {
                             .willReturn(WireMock.unauthorized()));
         }
 
-        @ParameterizedTest
-        @MethodSource("credentials")
-        @DisplayName("create evaluator definition: when api key is present, then return proper response")
-        void createAutomationRuleEvaluator__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
-
-            var ruleEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
-                    .build();
+        @Test
+        void createEvaluator__whenUnAuthorizedApiKey__thenReturnUnauthorized() {
+            var ruleEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class);
 
             mockTargetWorkspace(okApikey, WORKSPACE_NAME, WORKSPACE_ID);
 
-            try (var actualResponse = client.target(URL_TEMPLATE.formatted(baseURI, ruleEvaluator.getProjectId()))
-                    .request()
-                    .header(HttpHeaders.AUTHORIZATION, apiKey)
-                    .accept(MediaType.APPLICATION_JSON_TYPE)
-                    .header(WORKSPACE_HEADER, WORKSPACE_NAME)
-                    .post(Entity.json(ruleEvaluator))) {
-
-                if (isAuthorized) {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(201);
-                    assertThat(actualResponse.hasEntity()).isFalse();
-
-                } else {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
-                }
+            try (var actualResponse = evaluatorsResourceClient.createEvaluator(
+                    ruleEvaluator, ruleEvaluator.getProjectId(), WORKSPACE_NAME, fakeApikey, 401)) {
+                assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
             }
-
         }
 
-        @ParameterizedTest
-        @MethodSource("credentials")
-        @DisplayName("get evaluators by project id: when api key is present, then return proper response")
-        void getProjectAutomationRuleEvaluators__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
-
-            final String workspaceName = "workspace-" + UUID.randomUUID();
-            final String workspaceId = UUID.randomUUID().toString();
-            final UUID projectId = UUID.randomUUID();
+        @Test
+        void getProjectAutomationRuleEvaluators__whenUnAuthorizedApiKey__thenReturnUnauthorized() {
+            var workspaceName = "workspace-" + UUID.randomUUID();
+            var workspaceId = UUID.randomUUID().toString();
 
             mockTargetWorkspace(okApikey, workspaceName, workspaceId);
 
-            int samplesToCreate = 15;
-
-            IntStream.range(0, samplesToCreate).forEach(i -> {
-                var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class)
-                        .toBuilder().id(null).projectId(null).build();
-
-                evaluatorsResourceClient.createEvaluator(evaluator, projectId, workspaceName, okApikey);
-            });
-
-            try (var actualResponse = client.target(URL_TEMPLATE.formatted(baseURI, projectId))
-                    .queryParam("size", samplesToCreate)
-                    .request()
-                    .header(HttpHeaders.AUTHORIZATION, apiKey)
-                    .accept(MediaType.APPLICATION_JSON_TYPE)
-                    .header(WORKSPACE_HEADER, workspaceName)
-                    .get()) {
-
-                if (isAuthorized) {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(200);
-                    assertThat(actualResponse.hasEntity()).isTrue();
-
-                    var actualEntity = actualResponse
-                            .readEntity(AutomationRuleEvaluator.AutomationRuleEvaluatorPage.class);
-                    assertThat(actualEntity.content()).hasSize(samplesToCreate);
-                    assertThat(actualEntity.total()).isEqualTo(samplesToCreate);
-
-                } else {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
-                }
+            try (var actualResponse = evaluatorsResourceClient.findEvaluator(
+                    generator.generate(), null, null, null, workspaceName, fakeApikey, 401)
+            ) {
+                assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
+                assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
             }
         }
 
         @Test
         @DisplayName("search project evaluators: when searching by name, then return evaluators")
         void find__whenSearchingByName__thenReturnEvaluators() {
-
             var workspaceName = "workspace-" + UUID.randomUUID();
             var workspaceId = UUID.randomUUID().toString();
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
             var apiKey = UUID.randomUUID().toString();
 
             mockTargetWorkspace(apiKey, workspaceName, workspaceId);
@@ -356,43 +314,16 @@ class AutomationRuleEvaluatorsResourceTest {
             assertThat(content.stream().map(AutomationRuleEvaluator::getName).toList()).contains(name);
         }
 
-        @ParameterizedTest
-        @MethodSource("credentials")
-        @DisplayName("get evaluator by id: when api key is present, then return proper response")
-        void getAutomationRuleEvaluatorById__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
-
-            var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class)
-                    .toBuilder().id(null).projectId(null).build();
-
-            String workspaceName = "workspace-" + UUID.randomUUID();
-            String workspaceId = UUID.randomUUID().toString();
-            UUID projectId = UUID.randomUUID();
+        @Test
+        void getAutomationRuleEvaluatorById__whenUnAuthorizedApiKey__thenReturnUnauthorized() {
+            var workspaceName = "workspace-" + UUID.randomUUID();
+            var workspaceId = UUID.randomUUID().toString();
 
             mockTargetWorkspace(okApikey, workspaceName, workspaceId);
 
-            UUID id = evaluatorsResourceClient.createEvaluator(evaluator, projectId, workspaceName, okApikey);
-
-            try (var actualResponse = client.target(URL_TEMPLATE.formatted(baseURI, projectId))
-                    .path(id.toString())
-                    .request()
-                    .header(HttpHeaders.AUTHORIZATION, apiKey)
-                    .accept(MediaType.APPLICATION_JSON_TYPE)
-                    .header(WORKSPACE_HEADER, workspaceName)
-                    .get()) {
-
-                if (isAuthorized) {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(200);
-                    assertThat(actualResponse.hasEntity()).isTrue();
-
-                    var ruleEvaluator = actualResponse.readEntity(AutomationRuleEvaluator.class);
-                    assertThat(ruleEvaluator.getId()).isEqualTo(id);
-                    assertThat(ruleEvaluator.getProjectId()).isEqualTo(projectId);
-                } else {
-                    assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
-                }
+            try (var actualResponse = evaluatorsResourceClient.getEvaluator(
+                    generator.generate(), generator.generate(), workspaceName, fakeApikey, 401)) {
+                assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
             }
         }
 
@@ -400,20 +331,20 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("update evaluator: when api key is present, then return proper response")
         void updateAutomationRuleEvaluator__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
+                                                                                          boolean isAuthorized) {
 
             var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
             String workspaceName = "workspace-" + UUID.randomUUID();
             String workspaceId = UUID.randomUUID().toString();
-            UUID projectId = UUID.randomUUID();
+            UUID projectId = generator.generate();
 
             mockTargetWorkspace(okApikey, workspaceName, workspaceId);
 
             UUID id = evaluatorsResourceClient.createEvaluator(evaluator, projectId, workspaceName, okApikey);
 
-            var updatedEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorUpdate.class);
+            var updatedEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorUpdateLlmAsJudge.class);
 
             evaluatorsResourceClient.updateEvaluator(id, projectId, workspaceName, updatedEvaluator,
                     apiKey, isAuthorized);
@@ -423,14 +354,14 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("delete evaluator by id: when api key is present, then return proper response")
         void deleteAutomationRuleEvaluator__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
+                                                                                          boolean isAuthorized) {
 
             var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
             String workspaceName = "workspace-" + UUID.randomUUID();
             String workspaceId = UUID.randomUUID().toString();
-            UUID projectId = UUID.randomUUID();
+            UUID projectId = generator.generate();
 
             mockTargetWorkspace(okApikey, workspaceName, workspaceId);
 
@@ -451,8 +382,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -461,8 +391,8 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("batch delete evaluators by id: when api key is present, then return proper response")
         void deleteProjectAutomationRuleEvaluators__whenApiKeyIsPresent__thenReturnProperResponse(String apiKey,
-                boolean isAuthorized) {
-            var projectId = UUID.randomUUID();
+                                                                                                  boolean isAuthorized) {
+            var projectId = generator.generate();
             var workspaceName = "workspace-" + UUID.randomUUID();
             var workspaceId = UUID.randomUUID().toString();
 
@@ -496,8 +426,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
 
@@ -520,8 +449,7 @@ class AutomationRuleEvaluatorsResourceTest {
 
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -586,8 +514,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     } else {
                         assertThat(actualResponse.getStatusInfo().getStatusCode())
                                 .isEqualTo(HttpStatus.SC_UNAUTHORIZED);
-                        assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                                .isEqualTo(UNAUTHORIZED_RESPONSE);
+                        assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                     }
                 }
             });
@@ -661,10 +588,10 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("create evaluator definition: when api key is present, then return proper response")
         void createAutomationRuleEvaluator__whenSessionTokenIsPresent__thenReturnProperResponse(String sessionToken,
-                boolean isAuthorized,
-                String workspaceName) {
+                                                                                                boolean isAuthorized,
+                                                                                                String workspaceName) {
 
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
             var ruleEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
@@ -680,8 +607,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -694,7 +620,7 @@ class AutomationRuleEvaluatorsResourceTest {
                 boolean isAuthorized,
                 String workspaceName) {
 
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
 
             int samplesToCreate = 15;
             var newWorkspaceName = "workspace-" + UUID.randomUUID();
@@ -731,8 +657,7 @@ class AutomationRuleEvaluatorsResourceTest {
 
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -741,13 +666,13 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("get evaluator by id: when api key is present, then return proper response")
         void getAutomationRuleEvaluatorById__whenSessionTokenIsPresent__thenReturnProperResponse(String sessionToken,
-                boolean isAuthorized,
-                String workspaceName) {
+                                                                                                 boolean isAuthorized,
+                                                                                                 String workspaceName) {
 
             var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
             UUID id = evaluatorsResourceClient.createEvaluator(evaluator, projectId, WORKSPACE_NAME, API_KEY);
 
             try (var actualResponse = client.target(URL_TEMPLATE.formatted(baseURI, projectId))
@@ -766,8 +691,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(ruleEvaluator.getId()).isEqualTo(id);
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -776,16 +700,16 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("update evaluator: when api key is present, then return proper response")
         void updateAutomationRuleEvaluator__whenSessionTokenIsPresent__thenReturnProperResponse(String sessionToken,
-                boolean isAuthorized,
-                String workspaceName) {
+                                                                                                boolean isAuthorized,
+                                                                                                String workspaceName) {
 
             var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
-            UUID projectId = UUID.randomUUID();
+            var projectId = generator.generate();
             UUID id = evaluatorsResourceClient.createEvaluator(evaluator, projectId, WORKSPACE_NAME, API_KEY);
 
-            var updatedEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorUpdate.class);
+            var updatedEvaluator = factory.manufacturePojo(AutomationRuleEvaluatorUpdateLlmAsJudge.class);
 
             try (var actualResponse = client.target(URL_TEMPLATE.formatted(baseURI, projectId))
                     .path(id.toString())
@@ -800,8 +724,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -810,13 +733,13 @@ class AutomationRuleEvaluatorsResourceTest {
         @MethodSource("credentials")
         @DisplayName("delete evaluator by id: when api key is present, then return proper response")
         void deleteAutomationRuleEvaluator__whenSessionTokenIsPresent__thenReturnProperResponse(String sessionToken,
-                boolean isAuthorized,
-                String workspaceName) {
+                                                                                                boolean isAuthorized,
+                                                                                                String workspaceName) {
 
             var evaluator = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder().id(null)
                     .build();
 
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
             var id = evaluatorsResourceClient.createEvaluator(evaluator, projectId, WORKSPACE_NAME, API_KEY);
             var deleteMethod = BatchDelete.builder().ids(Collections.singleton(id)).build();
 
@@ -833,8 +756,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -847,7 +769,7 @@ class AutomationRuleEvaluatorsResourceTest {
                 boolean isAuthorized,
                 String workspaceName) {
 
-            var projectId = UUID.randomUUID();
+            var projectId = generator.generate();
 
             var evaluator1 = factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class).toBuilder()
                     .projectId(projectId).build();
@@ -877,8 +799,7 @@ class AutomationRuleEvaluatorsResourceTest {
                     assertThat(actualResponse.hasEntity()).isFalse();
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
 
@@ -901,8 +822,7 @@ class AutomationRuleEvaluatorsResourceTest {
 
                 } else {
                     assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(401);
-                    assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                            .isEqualTo(UNAUTHORIZED_RESPONSE);
+                    assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                 }
             }
         }
@@ -963,11 +883,194 @@ class AutomationRuleEvaluatorsResourceTest {
                     } else {
                         assertThat(actualResponse.getStatusInfo().getStatusCode())
                                 .isEqualTo(HttpStatus.SC_UNAUTHORIZED);
-                        assertThat(actualResponse.readEntity(io.dropwizard.jersey.errors.ErrorMessage.class))
-                                .isEqualTo(UNAUTHORIZED_RESPONSE);
+                        assertThat(actualResponse.readEntity(ErrorMessage.class)).isEqualTo(UNAUTHORIZED_RESPONSE);
                     }
                 }
             });
         }
+    }
+
+    @Nested
+    @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+    class CreateAndGetEvaluator {
+
+        Stream<AutomationRuleEvaluator<?>> createAndGet() {
+            return Stream.of(
+                    factory.manufacturePojo(AutomationRuleEvaluatorLlmAsJudge.class),
+                    factory.manufacturePojo(AutomationRuleEvaluatorUserDefinedMetricPython.class));
+        }
+
+        @ParameterizedTest
+        @MethodSource
+        void createAndGet(AutomationRuleEvaluator<?> automationRuleEvaluator) {
+            var id = evaluatorsResourceClient.createEvaluator(
+                    automationRuleEvaluator, automationRuleEvaluator.getProjectId(), WORKSPACE_NAME, API_KEY);
+
+            var expectedAutomationRuleEvaluator = automationRuleEvaluator.toBuilder()
+                    .id(id)
+                    .createdBy(USER)
+                    .lastUpdatedBy(USER)
+                    .build();
+
+            try (var actualResponse = evaluatorsResourceClient.getEvaluator(
+                    id, automationRuleEvaluator.getProjectId(), WORKSPACE_NAME, API_KEY, 200)) {
+                var actualAutomationRuleEvaluator = actualResponse.readEntity(AutomationRuleEvaluator.class);
+                assertThat(actualAutomationRuleEvaluator)
+                        .usingRecursiveComparison()
+                        .ignoringFields(AUTOMATION_RULE_EVALUATOR_IGNORED_FIELDS)
+                        .isEqualTo(expectedAutomationRuleEvaluator);
+                assertIgnoredFields(actualAutomationRuleEvaluator, expectedAutomationRuleEvaluator);
+            }
+        }
+    }
+
+    @Nested
+    @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+    class FindEvaluator {
+
+        Stream<Class<? extends AutomationRuleEvaluator<?>>> find() {
+            return Stream.of(
+                    AutomationRuleEvaluatorLlmAsJudge.class,
+                    AutomationRuleEvaluatorUserDefinedMetricPython.class);
+        }
+
+        @ParameterizedTest
+        @MethodSource
+        void find(Class<? extends AutomationRuleEvaluator<?>> evaluatorClass) {
+            var projectId = generator.generate();
+            var unexpectedProjectId = generator.generate();
+
+            var evaluators = PodamFactoryUtils.manufacturePojoList(factory, evaluatorClass)
+                    .stream()
+                    .map(evaluator -> {
+                        var id = evaluatorsResourceClient.createEvaluator(
+                                evaluator, projectId, WORKSPACE_NAME, API_KEY);
+                        return evaluator.toBuilder()
+                                .id(id)
+                                .projectId(projectId)
+                                .createdBy(USER)
+                                .lastUpdatedBy(USER)
+                                .build();
+                    }).toList();
+
+            var unexpectedEvaluators = PodamFactoryUtils.manufacturePojoList(factory, evaluatorClass)
+                    .stream()
+                    .map(evaluator -> {
+                        var id = evaluatorsResourceClient.createEvaluator(
+                                evaluator, unexpectedProjectId, WORKSPACE_NAME, API_KEY);
+                        return evaluator.toBuilder()
+                                .id(id)
+                                .projectId(unexpectedProjectId)
+                                .createdBy(USER)
+                                .lastUpdatedBy(USER)
+                                .build();
+                    }).toList();
+
+            var pageSize = evaluators.size() / 2 + 1;
+            var expectedEvaluators1 = evaluators.reversed().subList(0, pageSize);
+            var expectedEvaluators2 = evaluators.reversed().subList(pageSize, evaluators.size());
+
+            findAndAssertPage(
+                    projectId,
+                    null,
+                    1,
+                    pageSize,
+                    WORKSPACE_NAME,
+                    API_KEY,
+                    evaluators.size(),
+                    expectedEvaluators1,
+                    unexpectedEvaluators
+            );
+            findAndAssertPage(
+                    projectId,
+                    null,
+                    2,
+                    pageSize,
+                    WORKSPACE_NAME,
+                    API_KEY,
+                    evaluators.size(),
+                    expectedEvaluators2,
+                    unexpectedEvaluators
+            );
+        }
+
+        @ParameterizedTest
+        @MethodSource("find")
+        void findByName(Class<? extends AutomationRuleEvaluator<?>> evaluatorClass) {
+            var projectId = generator.generate();
+
+            var evaluators = PodamFactoryUtils.manufacturePojoList(factory, evaluatorClass)
+                    .stream()
+                    .map(evaluator -> {
+                        var id = evaluatorsResourceClient.createEvaluator(
+                                evaluator, projectId, WORKSPACE_NAME, API_KEY);
+                        return evaluator.toBuilder()
+                                .id(id)
+                                .projectId(projectId)
+                                .createdBy(USER)
+                                .lastUpdatedBy(USER)
+                                .build();
+                    }).toList();
+
+            var expectedEvaluators = List.of(evaluators.getFirst());
+            var unexpectedEvaluators = evaluators.subList(1, evaluators.size());
+
+            findAndAssertPage(
+                    projectId,
+                    evaluators.getFirst().getName().substring(2, evaluators.getFirst().getName().length() - 3)
+                            .toUpperCase(),
+                    1,
+                    evaluators.size(),
+                    WORKSPACE_NAME,
+                    API_KEY,
+                    1,
+                    expectedEvaluators,
+                    unexpectedEvaluators
+            );
+        }
+
+        private void findAndAssertPage(
+                UUID projectId,
+                String evaluatorName,
+                int page,
+                int size,
+                String workspaceName,
+                String apiKey,
+                int expectedTotal,
+                List<? extends AutomationRuleEvaluator<?>> expectedAutomationRuleEvaluators,
+                List<? extends AutomationRuleEvaluator<?>> unexpectedAutomationRuleEvaluators) {
+
+            try (var actualResponse = evaluatorsResourceClient.findEvaluator(
+                    projectId, evaluatorName, page, size, workspaceName, apiKey, 200)) {
+                assertThat(actualResponse.hasEntity()).isTrue();
+
+                var actualEntity = actualResponse.readEntity(AutomationRuleEvaluator.AutomationRuleEvaluatorPage.class);
+                assertThat(actualEntity.page()).isEqualTo(page);
+                assertThat(actualEntity.size()).isEqualTo(expectedAutomationRuleEvaluators.size());
+                assertThat(actualEntity.total()).isEqualTo(expectedTotal);
+
+                var actualAutomationRuleEvaluators = actualEntity.content();
+                assertThat(actualAutomationRuleEvaluators).hasSize(expectedAutomationRuleEvaluators.size());
+                assertThat(actualAutomationRuleEvaluators)
+                        .usingRecursiveFieldByFieldElementComparatorIgnoringFields(AUTOMATION_RULE_EVALUATOR_IGNORED_FIELDS)
+                        .containsExactlyElementsOf(expectedAutomationRuleEvaluators);
+
+                for (int i = 0; i < actualAutomationRuleEvaluators.size(); i++) {
+                    var actualAutomationRuleEvaluator = actualAutomationRuleEvaluators.get(i);
+                    var expectedAutomationRuleEvaluator = expectedAutomationRuleEvaluators.get(i);
+                    assertIgnoredFields(actualAutomationRuleEvaluator, expectedAutomationRuleEvaluator);
+                }
+
+                assertThat(actualAutomationRuleEvaluators)
+                        .usingRecursiveFieldByFieldElementComparatorIgnoringFields(AUTOMATION_RULE_EVALUATOR_IGNORED_FIELDS)
+                        .doesNotContainAnyElementsOf(unexpectedAutomationRuleEvaluators);
+            }
+        }
+    }
+
+    private void assertIgnoredFields(AutomationRuleEvaluator<?> actualRuleEvaluator,
+                                     AutomationRuleEvaluator<?> expectedRuleEvaluator) {
+        assertThat(actualRuleEvaluator.getCreatedAt()).isAfter(expectedRuleEvaluator.getCreatedAt());
+        assertThat(actualRuleEvaluator.getLastUpdatedAt()).isAfter(expectedRuleEvaluator.getLastUpdatedAt());
     }
 }

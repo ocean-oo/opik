@@ -127,13 +127,13 @@ public class AutomationRuleEvaluatorsResource {
 
     @PATCH
     @Path("/{id}")
-    @Operation(operationId = "updateAutomationRuleEvaluator", summary = "update Automation Rule Evaluator by id", description = "update Automation Rule Evaluator by id", responses = {
+    @Operation(operationId = "updateAutomationRuleEvaluator", summary = "Update Automation Rule Evaluator by id", description = "Update Automation Rule Evaluator by id", responses = {
             @ApiResponse(responseCode = "204", description = "No content"),
     })
     @RateLimited
     public Response updateEvaluator(@PathParam("id") UUID id,
             @PathParam("projectId") UUID projectId,
-            @RequestBody(content = @Content(schema = @Schema(implementation = AutomationRuleEvaluatorUpdate.class))) @NotNull @Valid AutomationRuleEvaluatorUpdate evaluatorUpdate) {
+            @RequestBody(content = @Content(schema = @Schema(implementation = AutomationRuleEvaluatorUpdate.class))) @NotNull @Valid AutomationRuleEvaluatorUpdate<?> evaluatorUpdate) {
 
         String workspaceId = requestContext.get().getWorkspaceId();
         String userName = requestContext.get().getUserName();

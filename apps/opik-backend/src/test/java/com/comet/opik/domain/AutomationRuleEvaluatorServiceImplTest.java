@@ -2,7 +2,7 @@ package com.comet.opik.domain;
 
 import com.comet.opik.api.AutomationRuleEvaluatorLlmAsJudge;
 import com.comet.opik.api.AutomationRuleEvaluatorType;
-import com.comet.opik.api.AutomationRuleEvaluatorUpdate;
+import com.comet.opik.api.AutomationRuleEvaluatorUpdateLlmAsJudge;
 import com.comet.opik.api.resources.utils.AuthTestUtils;
 import com.comet.opik.api.resources.utils.ClickHouseContainerUtils;
 import com.comet.opik.api.resources.utils.ClientSupportUtils;
@@ -219,14 +219,14 @@ class AutomationRuleEvaluatorServiceImplTest {
         assertThat(judges).hasSize(1);
         assertEvaluator(evaluator, judges.getFirst());
 
-        var evaluatorUpdate = factory.manufacturePojo(AutomationRuleEvaluatorUpdate.class);
+        var evaluatorUpdate = factory.manufacturePojo(AutomationRuleEvaluatorUpdateLlmAsJudge.class);
 
         service.update(evaluator.getId(), projectId, WORKSPACE_ID, USER, evaluatorUpdate);
 
         judges = service.findAll(projectId, WORKSPACE_ID, AutomationRuleEvaluatorType.LLM_AS_JUDGE);
 
         assertThat(judges).hasSize(1);
-        assertThat(judges.getFirst().getName()).isEqualTo(evaluatorUpdate.name());
+        assertThat(judges.getFirst().getName()).isEqualTo(evaluatorUpdate.getName());
     }
 
     @Test

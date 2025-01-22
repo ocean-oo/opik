@@ -1,7 +1,7 @@
 package com.comet.opik.api.resources.utils.resources;
 
 import com.comet.opik.api.AutomationRuleEvaluator;
-import com.comet.opik.api.AutomationRuleEvaluatorUpdate;
+import com.comet.opik.api.AutomationRuleEvaluatorUpdateLlmAsJudge;
 import com.comet.opik.api.resources.utils.TestHttpClientUtils;
 import com.comet.opik.api.resources.utils.TestUtils;
 import jakarta.ws.rs.HttpMethod;
@@ -26,11 +26,41 @@ public class AutomationRuleEvaluatorResourceClient {
     private final ClientSupport client;
     private final String baseURI;
 
+    public Response getEvaluator(UUID id, UUID projectId, String workspaceName, String apiKey, int expectedStatus) {
+        var actualResponse = client.target(RESOURCE_PATH.formatted(baseURI, projectId))
+                .path(id.toString())
+                .request()
+                .header(WORKSPACE_HEADER, workspaceName)
+                .header(HttpHeaders.AUTHORIZATION, apiKey)
+                .accept(MediaType.APPLICATION_JSON_TYPE)
+                .get();
+
+        assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(expectedStatus);
+
+        return actualResponse;
+    }
+
+    public Response findEvaluator(
+            UUID projectId, String name, Integer page, Integer size, String workspaceName, String apiKey, int expectedStatus) {
+        var actualResponse = client.target(RESOURCE_PATH.formatted(baseURI, projectId))
+                .queryParam("name", name)
+                .queryParam("page", page)
+                .queryParam("size", size)
+                .request()
+                .header(WORKSPACE_HEADER, workspaceName)
+                .header(HttpHeaders.AUTHORIZATION, apiKey)
+                .accept(MediaType.APPLICATION_JSON_TYPE)
+                .get();
+
+        assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(expectedStatus);
+
+        return actualResponse;
+    }
     public UUID createEvaluator(AutomationRuleEvaluator<?> evaluator, UUID projectId, String workspaceName,
             String apiKey) {
         try (var actualResponse = createEvaluator(evaluator, projectId, workspaceName, apiKey, HttpStatus.SC_CREATED)) {
             assertThat(actualResponse.getStatusInfo().getStatusCode()).isEqualTo(201);
-
+            assertThat(actualResponse.hasEntity()).isFalse();
             return TestUtils.getIdFromLocation(actualResponse.getLocation());
         }
     }
@@ -51,7 +81,7 @@ public class AutomationRuleEvaluatorResourceClient {
     }
 
     public void updateEvaluator(UUID evaluatorId, UUID projectId, String workspaceName,
-            AutomationRuleEvaluatorUpdate updatedEvaluator, String apiKey, boolean isAuthorized) {
+            AutomationRuleEvaluatorUpdateLlmAsJudge updatedEvaluator, String apiKey, boolean isAuthorized) {
         try (var actualResponse = client.target(RESOURCE_PATH.formatted(baseURI, projectId))
                 .path(evaluatorId.toString())
                 .request()

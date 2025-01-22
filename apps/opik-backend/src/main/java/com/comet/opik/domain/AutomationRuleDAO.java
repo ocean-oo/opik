@@ -20,6 +20,7 @@ import java.util.UUID;
 @RegisterArgumentFactory(UUIDArgumentFactory.class)
 @RegisterRowMapper(AutomationRuleRowMapper.class)
 @RegisterConstructorMapper(LlmAsJudgeAutomationRuleEvaluatorModel.class)
+@RegisterConstructorMapper(UserDefinedMetricPythonAutomationRuleEvaluatorModel.class)
 @RegisterRowMapper(AutomationRuleEvaluatorRowMapper.class)
 interface AutomationRuleDAO {
 
@@ -50,16 +51,4 @@ interface AutomationRuleDAO {
             @Define("ids") @BindList(onEmpty = BindList.EmptyHandling.NULL_VALUE, value = "ids") Set<UUID> ids,
             @Bind("projectId") UUID projectId,
             @Bind("workspaceId") String workspaceId);
-
-    @SqlQuery("""
-            SELECT COUNT(*)
-            FROM automation_rules
-            WHERE project_id = :projectId AND workspace_id = :workspaceId
-            <if(action)> AND `action` = :action <endif>
-            """)
-    @UseStringTemplateEngine
-    @AllowUnusedBindings
-    long findCount(@Bind("projectId") UUID projectId,
-            @Bind("workspaceId") String workspaceId,
-            @Define("action") @Bind("action") AutomationRule.AutomationRuleAction action);
 }

@@ -1,18 +1,44 @@
 package com.comet.opik.api;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
-import jakarta.validation.constraints.NotNull;
-import lombok.Builder;
+import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.experimental.SuperBuilder;
 
-import static com.comet.opik.api.AutomationRuleEvaluatorLlmAsJudge.LlmAsJudgeCode;
-
-@Builder(toBuilder = true)
+@AllArgsConstructor
+@SuperBuilder(toBuilder = true)
+@Data
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "type", visible = true)
+@JsonSubTypes({
+        @JsonSubTypes.Type(value = AutomationRuleEvaluatorUpdateLlmAsJudge.class, name = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE),
+        @JsonSubTypes.Type(value = AutomationRuleEvaluatorUserDefinedMetricPython.class, name = AutomationRuleEvaluatorType.Constants.USER_DEFINED_METRIC_PYTHON)
+})
+@Schema(name = "AutomationRuleEvaluator", discriminatorProperty = "type", discriminatorMapping = {
+        @DiscriminatorMapping(value = AutomationRuleEvaluatorType.Constants.LLM_AS_JUDGE, schema = AutomationRuleEvaluatorUpdateLlmAsJudge.class),
+        @DiscriminatorMapping(value = AutomationRuleEvaluatorType.Constants.USER_DEFINED_METRIC_PYTHON, schema = AutomationRuleEvaluatorUserDefinedMetricPython.class)
+})
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-public record AutomationRuleEvaluatorUpdate(
-        @NotNull String name,
-        @NotNull LlmAsJudgeCode code,
-        @NotNull Float samplingRate) {
+public abstract sealed class AutomationRuleEvaluatorUpdate<T> implements AutomationRuleUpdate
+        permits AutomationRuleEvaluatorUpdateLlmAsJudge, AutomationRuleEvaluatorUpdateUserDefinedMetricPython {
+
+    @NotBlank private final String name;
+
+    private final float samplingRate;
+
+    public abstract AutomationRuleEvaluatorType getType();
+
+    public abstract T getCode();
+
+    @Override
+    public AutomationRule.AutomationRuleAction getAction() {
+        return AutomationRule.AutomationRuleAction.EVALUATOR;
+    }
 }
